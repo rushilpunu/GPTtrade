@@ -1,0 +1,31 @@
+[project]
+name = "gpt-trade"
+version = "0.1.0"
+description = "Event-driven algorithmic trading system"
+authors = [{ name = "Your Name", email = "your.email@example.com" }]
+dependencies = [
+    "pydantic",
+    "fastapi",
+    "uvicorn",
+    "httpx",
+    "pandas",
+    "numpy",
+    "sqlite-utils",
+    "python-dotenv",
+    "pyyaml",
+    "alpaca-trade-api",
+    "aiohttp",
+    "structlog",
+    "schedule",
+    "pytest",
+]
+requires-python = ">=3.11"
+license = { text = "MIT" }
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["gpt_trade*"]
