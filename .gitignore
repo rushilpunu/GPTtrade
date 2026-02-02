@@ -1,0 +1,28 @@
+# IDE and tools
+.github
+.claude
+.pytest_cache
+.venv
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+
+# Logs and databases
+*.log
+*.db
+logs/
+
+# Environment
+.env
+
+# Build artifacts
+dist/
+build/
+
+# Debug files
+firebase-debug.log
+codex.md
+gemini.md
