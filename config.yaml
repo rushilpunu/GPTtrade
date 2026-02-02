@@ -18,17 +18,29 @@ max_daily_loss_pct: 0.02
 max_trades_per_day: 10
 cooldown_minutes: 30
 cost_buffer: 0.001
+
+# Policy Selection: 'tradingagents', 'llm', or 'rules'
+# - tradingagents: Multi-agent debate system (REQUIRED - no fallback)
+# - llm: Single LLM decision with fallback to rules
+# - rules: Deterministic rules-based policy
 policy_type: rules
-llm:
-  model: gpt-4.1
-  endpoint: https://api.openai.com/v1
-  temperature: 0.1
+
+# LLM Provider Settings (used by 'llm' and 'tradingagents' policies)
+llm_provider: 'gemini'  # Options: 'openai', 'gemini', 'anthropic'
+llm_model: 'gemini-2.0-flash'  # For OpenAI: gpt-4o-mini, gpt-4o. For Gemini: gemini-2.0-flash
+llm_temperature: 0.1
+llm_max_tokens: 1024
+
+# TradingAgents-specific settings (only used when policy_type: tradingagents)
+tradingagents_max_debate_rounds: 1
+
 news_enabled: true
 use_limit_orders: true
 limit_order_offset: 0.001
 stale_order_timeout_seconds: 300
 enable_shorts: false
 enable_leverage: false
+
 logging:
   level: INFO
   to_console: true
@@ -37,11 +49,6 @@ logging:
   format: "%(asctime)s %(levelname)s %(name)s: %(message)s"
   max_bytes: 10485760
   backup_count: 5
-# LLM Provider Settings
-llm_provider: 'gemini'  # Options: 'openai' or 'gemini'
-llm_model: 'gemini-2.0-flash'  # For OpenAI: gpt-4o-mini, gpt-4o. For Gemini: gemini-2.0-flash
-llm_temperature: 0.1
-llm_max_tokens: 1024
 
 # Web Monitoring Server
 enable_web: true
@@ -56,22 +63,3 @@ notify_on_risk_blocks: true
 notify_on_large_move: true
 large_move_threshold_pct: 3.0
 notify_on_kill_switch: true
-policy_type: rules
-llm:
-  model: gpt-4o-mini
-  endpoint: https://api.openai.com/v1
-  temperature: 0.1
-news_enabled: true
-use_limit_orders: true
-limit_order_offset: 0.001
-stale_order_timeout_seconds: 300
-enable_shorts: false
-enable_leverage: false
-logging:
-  level: INFO
-  to_console: true
-  to_file: true
-  file: logs/trading.log
-  format: "%(asctime)s %(levelname)s %(name)s: %(message)s"
-  max_bytes: 10485760
-  backup_count: 5

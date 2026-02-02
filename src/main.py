@@ -17,7 +17,13 @@ import yaml
 from dotenv import load_dotenv
 
 from agent.llm_clients import LLMClientError, create_llm_client
-from agent.policy import LLMPolicy, RulesPolicy
+from agent.policy import LLMPolicy, RulesPolicy, DecisionWithTrace, LLMTrace
+from agent.engine_loader import (
+    TradingAgentsNotFoundError,
+    TradingAgentsInitError,
+    verify_tradingagents,
+)
+from agent.tradingagents_engine import TradingAgentsPolicy, create_tradingagents_policy
 from data.calendar_data import CalendarProvider, create_calendar_provider
 from data.market_data import AlpacaMarketData, MarketDataProvider, YahooFinanceMarketData
 from data.news_data import NewsProvider, create_news_provider
@@ -84,6 +90,8 @@ class TradingSystem:
         self._news_cache: Dict[str, list] = {}
         self._features_cache: Dict[str, Dict[str, Any]] = {}
         self._decisions_cache: Dict[str, Any] = {}
+        self._trace_cache: Dict[str, DecisionWithTrace] = {}
+        self._cycle_summary: Dict[str, Any] = {}
         self._pending_trade_notifications: list[Dict[str, Any]] = []
         self._pending_risk_notifications: list[Dict[str, Any]] = []
 
@@ -166,14 +174,35 @@ class TradingSystem:
         policy_type = str(self._config.get("policy_type", "rules"))
         now = datetime.utcnow()
 
+        # Cycle summary tracking
+        llm_called_count = 0
+        llm_fallback_count = 0
+        total_symbols = 0
+
         for symbol, features in self._features_cache.items():
+            total_symbols += 1
             try:
                 context = self._build_context(symbol)
-                decision = self._policy.decide(features, context)
+
+                # Use decide_with_trace for full LLM tracing
+                result: DecisionWithTrace = self._policy.decide_with_trace(features, context)
+                decision = result.decision
+                trace = result.trace
+
                 self._decisions_cache[symbol] = decision
+                # Also cache the trace for execute_orders
+                self._trace_cache[symbol] = result
+
+                # Update cycle summary counters
+                if trace.llm_called:
+                    llm_called_count += 1
+                if trace.used_fallback:
+                    llm_fallback_count += 1
+
                 self._logger.info(
-                    "Decision for %s: %s (confidence=%.2f) - %s",
-                    symbol, decision.action.value, decision.confidence, decision.rationale
+                    "Decision for %s: %s (confidence=%.2f) policy=%s llm_called=%s - %s",
+                    symbol, decision.action.value, decision.confidence,
+                    result.policy_name, trace.llm_called, decision.rationale
                 )
 
                 record = DecisionRecord(
@@ -184,10 +213,34 @@ class TradingSystem:
                     rationale=str(decision.rationale),
                     feature_snapshot=features,
                     policy_type=policy_type,
+                    # LLM trace fields
+                    policy_name=result.policy_name,
+                    llm_provider=trace.llm_provider,
+                    llm_model=trace.llm_model,
+                    llm_called=trace.llm_called,
+                    llm_fallback_reason=trace.llm_fallback_reason,
+                    llm_latency_ms=trace.llm_latency_ms,
+                    llm_input_hash=trace.llm_input_hash,
+                    llm_output_hash=trace.llm_output_hash,
+                    llm_action=trace.llm_action,
                 )
                 self._database.save_decision(record)
             except Exception:
                 self._logger.exception("Decision failed for %s", symbol)
+
+        # Log cycle summary
+        provider = self._config.get("llm_provider", "none") if policy_type == "llm" else "none"
+        self._logger.info(
+            "CYCLE_SUMMARY: policy=%s provider=%s symbols=%d llm_called=%d fallbacks=%d",
+            policy_type, provider, total_symbols, llm_called_count, llm_fallback_count
+        )
+        self._cycle_summary = {
+            "policy_type": policy_type,
+            "provider": provider,
+            "total_symbols": total_symbols,
+            "llm_called_count": llm_called_count,
+            "llm_fallback_count": llm_fallback_count,
+        }
 
     def execute_orders(self) -> None:
         if self._dry_run:
@@ -639,6 +692,31 @@ def _build_market_data(config: Mapping[str, Any]) -> MarketDataProvider:
 
 def _build_policy(config: Mapping[str, Any]) -> Any:
     policy_type = str(config.get("policy_type", "rules")).lower()
+
+    # TradingAgents as the decision engine (REQUIRED - no fallback)
+    if policy_type == "tradingagents":
+        logger = logging.getLogger(__name__)
+        logger.info("Initializing TradingAgents as decision engine (REQUIRED)")
+
+        # Fail-fast: verify TradingAgents is available before proceeding
+        try:
+            verify_tradingagents()
+        except TradingAgentsNotFoundError as e:
+            logger.error("FATAL: TradingAgents is REQUIRED but not found: %s", e)
+            raise SystemExit(
+                "TradingAgents is required but not found. "
+                "Please clone TradingAgents to the project root:\n"
+                "  git clone https://github.com/TauricResearch/TradingAgents.git"
+            ) from e
+
+        # Build TradingAgents policy - fail-fast on init errors
+        try:
+            return create_tradingagents_policy(config)
+        except (TradingAgentsNotFoundError, TradingAgentsInitError) as e:
+            logger.error("FATAL: TradingAgents initialization failed: %s", e)
+            raise SystemExit(f"TradingAgents initialization failed: {e}") from e
+
+    # LLM policy (with fallback to rules)
     if policy_type == "llm":
         provider = str(config.get("llm_provider", "openai"))
         model = str(config.get("llm_model", "gpt-4o-mini"))
@@ -670,7 +748,12 @@ def _build_policy(config: Mapping[str, Any]) -> Any:
             )
             return RulesPolicy()
 
-        return LLMPolicy(llm_client=llm_client, fallback_policy=RulesPolicy())
+        return LLMPolicy(
+            llm_client=llm_client,
+            fallback_policy=RulesPolicy(),
+            provider=provider,
+            model=model,
+        )
 
     return RulesPolicy()
 
@@ -698,6 +781,11 @@ def _parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         action="store_true",
         help="Run a single trading cycle and exit.",
     )
+    parser.add_argument(
+        "--explain",
+        action="store_true",
+        help="Print per-cycle summary to stdout (policy, LLM calls, fallbacks, overrides).",
+    )
     return parser.parse_args(argv)
 
 
@@ -706,6 +794,48 @@ def _resolve_log_file(config: Mapping[str, Any]) -> Optional[str]:
     if log_config.get("to_file", False):
         return str(log_config.get("file", "logs/trading.log"))
     return None
+
+
+def _print_cycle_explanation(system: TradingSystem) -> None:
+    """Print per-cycle summary for --explain mode."""
+    summary = getattr(system, "_cycle_summary", {})
+    trace_cache = getattr(system, "_trace_cache", {})
+
+    print("\n" + "=" * 60)
+    print("CYCLE EXPLANATION")
+    print("=" * 60)
+
+    policy_type = summary.get("policy_type", "unknown")
+    provider = summary.get("provider", "none")
+    total = summary.get("total_symbols", 0)
+    llm_called = summary.get("llm_called_count", 0)
+    fallbacks = summary.get("llm_fallback_count", 0)
+
+    print(f"Policy configured: {policy_type}")
+    print(f"LLM provider: {provider}")
+    print(f"Total symbols: {total}")
+    print(f"LLM API calls made: {llm_called}")
+    print(f"Fallbacks to rules: {fallbacks}")
+
+    # Count overrides
+    overrides = 0
+    for symbol, result in trace_cache.items():
+        if hasattr(result, 'trace'):
+            # Check if action was overridden by risk gate (requires examining decisions cache)
+            pass
+
+    if trace_cache:
+        print("\nPer-symbol breakdown:")
+        for symbol, result in trace_cache.items():
+            trace = result.trace
+            decision = result.decision
+            status = "LLM" if trace.llm_called and not trace.used_fallback else "rules"
+            if trace.used_fallback:
+                status = f"fallback ({trace.llm_fallback_reason})"
+            latency = f"{trace.llm_latency_ms:.0f}ms" if trace.llm_latency_ms else "n/a"
+            print(f"  {symbol}: {decision.action.value} ({status}, latency={latency})")
+
+    print("=" * 60 + "\n")
 
 
 def main(argv: Optional[Iterable[str]] = None) -> None:
@@ -752,6 +882,8 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
 
     if args.once:
         system.run_cycle()
+        if args.explain:
+            _print_cycle_explanation(system)
         return
 
     intervals = config.get("scheduler_intervals") or config.get("intervals")

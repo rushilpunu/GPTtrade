@@ -65,6 +65,64 @@ class DecisionRecord(BaseModel):
         description="Policy or strategy identifier.",
         examples=["risk_parity_v2"],
     )
+    # LLM trace fields
+    policy_name: str = Field(
+        default="rules",
+        max_length=32,
+        description="Actual policy used: 'rules' or 'llm'.",
+    )
+    llm_provider: Optional[str] = Field(
+        default=None,
+        max_length=32,
+        description="LLM provider if used: 'openai' or 'gemini'.",
+    )
+    llm_model: Optional[str] = Field(
+        default=None,
+        max_length=64,
+        description="LLM model name if used.",
+    )
+    llm_called: bool = Field(
+        default=False,
+        description="Whether an LLM API call was made.",
+    )
+    llm_fallback_reason: Optional[str] = Field(
+        default=None,
+        max_length=32,
+        description="Reason for fallback: no_key|http_error|timeout|invalid_json|schema_fail|exception",
+    )
+    llm_latency_ms: Optional[float] = Field(
+        default=None,
+        description="LLM API latency in milliseconds.",
+    )
+    llm_input_hash: Optional[str] = Field(
+        default=None,
+        max_length=64,
+        description="SHA256 hash of LLM input (first 16 chars).",
+    )
+    llm_output_hash: Optional[str] = Field(
+        default=None,
+        max_length=64,
+        description="SHA256 hash of LLM output (first 16 chars).",
+    )
+    llm_action: Optional[str] = Field(
+        default=None,
+        max_length=16,
+        description="Raw action from LLM before risk gate.",
+    )
+    final_action: Optional[str] = Field(
+        default=None,
+        max_length=16,
+        description="Final action after risk gate.",
+    )
+    action_overridden_by_risk_gate: bool = Field(
+        default=False,
+        description="Whether risk gate overrode the action.",
+    )
+    override_reason: Optional[str] = Field(
+        default=None,
+        max_length=128,
+        description="Reason codes for risk gate override.",
+    )
 
 
 class OrderRecord(BaseModel):

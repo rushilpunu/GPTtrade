@@ -38,8 +38,18 @@ class PositionSizer:
         current_price: float,
         account_equity: float,
         current_positions: Iterable[Any],
+        confidence: Optional[float] = None,
     ) -> int:
-        """Return share delta for the given signal, or 0 if constrained."""
+        """Return share delta for the given signal, or 0 if constrained.
+
+        Args:
+            symbol: Instrument symbol
+            signal_strength: Action string (BUY, SELL, etc.) or numeric
+            current_price: Current price per share
+            account_equity: Total account equity
+            current_positions: List of current positions
+            confidence: Optional confidence value (0-1) from LLM to scale position
+        """
         if not symbol:
             return 0
         if current_price is None or current_price <= 0:
@@ -50,6 +60,16 @@ class PositionSizer:
         multiplier = self._normalize_signal(signal_strength)
         if multiplier == 0.0:
             return 0
+
+        # Apply confidence scaling if provided
+        if confidence is not None:
+            confidence_scale_min = self._get_config_float("confidence_scale_min") or 0.5
+            confidence_scale_max = self._get_config_float("confidence_scale_max") or 1.5
+            # Scale multiplier by confidence: low confidence = smaller position
+            # confidence 0.5 -> scale_min, confidence 1.0 -> scale_max
+            conf_range = confidence_scale_max - confidence_scale_min
+            conf_scale = confidence_scale_min + (confidence * conf_range)
+            multiplier = multiplier * conf_scale
 
         enable_shorts = self._get_config_bool("enable_shorts", "ENABLE_SHORTS")
         if multiplier < 0 and not enable_shorts:

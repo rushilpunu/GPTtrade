@@ -8,7 +8,7 @@ Event-driven algorithmic trading system that turns market data into decisions an
 - **Calendar-aware trading** with earnings/Fed/holiday blackouts
 - Risk gate with position sizing and exposure limits
 - Paper and live trading support (Alpaca + simulator broker)
-- Policy layer: rules-based or LLM-backed decisions
+- Policy layer: TradingAgents engine, rules-based, or LLM-backed decisions
 - Order execution with optional limit orders and cooldowns
 - Decision + order logging to a local SQLite database
 
@@ -90,7 +90,7 @@ Key knobs you can tune:
 - `max_trades_per_day`: throttle for order count.
 - `cooldown_minutes`: minimum wait between trades per symbol.
 - `cost_buffer`: slippage/fee buffer used in sizing/validation.
-- `policy_type`: `rules` or `llm`.
+- `policy_type`: `tradingagents`, `rules`, or `llm`.
 - `llm.model`, `llm.endpoint`, `llm.temperature`: LLM policy settings.
 - `news_enabled`: include news features when enabled.
 - `use_limit_orders`: toggle market vs limit orders.
@@ -198,6 +198,55 @@ llm_model: 'gemini-2.0-flash'
 Set `GEMINI_API_KEY` in your environment.
 
 Note: If no API key is set, the system falls back to the rules-based policy.
+
+## TradingAgents Integration (Multi-Agent Decision Engine)
+
+TradingAgents is a sophisticated multi-agent framework that can be used as the primary decision engine. When enabled, it orchestrates multiple specialized agents (market analysts, researchers, risk managers) in a debate-style architecture to reach trading decisions.
+
+### Setup
+
+1. **TradingAgents is included in the repository** at `./TradingAgents/`. No additional cloning required.
+
+2. **Install TradingAgents dependencies**:
+```bash
+pip install -r TradingAgents/requirements.txt
+```
+
+3. **Configure in config.yaml**:
+```yaml
+policy_type: 'tradingagents'
+llm_provider: 'openai'  # or 'google' or 'anthropic'
+llm_model: 'gpt-4o-mini'
+tradingagents_max_debate_rounds: 1  # optional
+```
+
+### How It Works
+- **Market Analyst**: Analyzes price data and technical indicators
+- **News Analyst**: Processes news and sentiment
+- **Fundamentals Analyst**: Reviews financial statements
+- **Social Media Analyst**: Monitors social sentiment
+- **Bull/Bear Researchers**: Debate investment thesis
+- **Risk Manager**: Evaluates risk/reward
+- **Trader**: Makes final decision after debate
+
+### Fail-Fast Behavior
+TradingAgents is a **REQUIRED** dependency when `policy_type: tradingagents`. The system will:
+- Verify TradingAgents is available at startup
+- **Refuse to start** if TradingAgents cannot be loaded
+- **No silent fallback** to rules-based policy
+
+### Verification
+Run the inspection tool to verify your TradingAgents setup:
+```bash
+python tools/inspect_tradingagents.py
+```
+
+### Troubleshooting
+| Issue | Solution |
+|-------|----------|
+| `TradingAgentsNotFoundError` | Ensure TradingAgents folder exists in project root |
+| Import errors | Run `pip install -r TradingAgents/requirements.txt` |
+| LLM errors | Verify `OPENAI_API_KEY` or `GEMINI_API_KEY` is set |
 
 ## Web Monitoring Dashboard
 

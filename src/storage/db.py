@@ -108,6 +108,19 @@ class TradingDatabase:
                 "feature_snapshot": "text",
                 "policy_type": "text",
                 "correlation_id": "text",
+                # LLM trace fields
+                "policy_name": "text",
+                "llm_provider": "text",
+                "llm_model": "text",
+                "llm_called": "integer",
+                "llm_fallback_reason": "text",
+                "llm_latency_ms": "float",
+                "llm_input_hash": "text",
+                "llm_output_hash": "text",
+                "llm_action": "text",
+                "final_action": "text",
+                "action_overridden_by_risk_gate": "integer",
+                "override_reason": "text",
             },
         )
         self._ensure_table(
@@ -205,6 +218,16 @@ class TradingDatabase:
 
     @staticmethod
     def _row_to_model(model_cls: Type[ModelT], row: Iterable[tuple[str, Any]] | Dict[str, Any]) -> ModelT:
+        import json
         row_dict = dict(row)
-        filtered = {field: row_dict.get(field) for field in model_cls.model_fields}
+        filtered = {}
+        for field in model_cls.model_fields:
+            value = row_dict.get(field)
+            # Handle JSON fields stored as strings
+            if field == "feature_snapshot" and isinstance(value, str):
+                try:
+                    value = json.loads(value)
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            filtered[field] = value
         return model_cls.model_validate(filtered)
