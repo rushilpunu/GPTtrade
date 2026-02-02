@@ -4,6 +4,8 @@ Event-driven algorithmic trading system that turns market data into decisions an
 
 ## Features
 - Behavioral signals from price/volume history
+- **News & sentiment analysis** with lexicon-based scoring
+- **Calendar-aware trading** with earnings/Fed/holiday blackouts
 - Risk gate with position sizing and exposure limits
 - Paper and live trading support (Alpaca + simulator broker)
 - Policy layer: rules-based or LLM-backed decisions
@@ -23,13 +25,16 @@ Event-driven algorithmic trading system that turns market data into decisions an
 │   ├── agent
 │   │   └── policy.py
 │   ├── data
-│   │   └── market_data.py
+│   │   ├── market_data.py
+│   │   ├── news_data.py          # News fetching (Alpha Vantage + RSS)
+│   │   └── calendar_data.py      # Earnings/Fed/holiday calendar
 │   ├── execution
 │   │   ├── alpaca_broker.py
 │   │   ├── broker_interface.py
 │   │   └── simulator_broker.py
 │   ├── features
-│   │   └── behavioral_features.py
+│   │   ├── behavioral_features.py
+│   │   └── sentiment.py          # Lexicon-based sentiment scoring
 │   ├── observability
 │   │   └── logging.py
 │   ├── risk
@@ -40,7 +45,12 @@ Event-driven algorithmic trading system that turns market data into decisions an
 │       └── models.py
 ├── tests
 │   ├── test_position_sizing.py
-│   └── test_risk_gate.py
+│   ├── test_risk_gate.py
+│   ├── test_sentiment.py         # Sentiment analysis tests
+│   └── test_calendar.py          # Calendar blackout tests
+├── tools
+│   ├── smoke.py
+│   └── audit.py                  # System wiring audit
 └── TradingAgents
     └── ...
 ```
@@ -243,3 +253,83 @@ notify_on_large_move: true
 large_move_threshold_pct: 3.0
 notify_on_kill_switch: true
 ```
+
+## News & Sentiment Analysis
+
+The system integrates news headlines into trading decisions using a deterministic lexicon-based sentiment scorer.
+
+### How It Works
+1. **News Fetching**: Headlines are fetched via Alpha Vantage API (if key provided) or RSS feeds (fallback)
+2. **Sentiment Scoring**: Each headline is scored using a financial lexicon (~60 positive, ~60 negative terms)
+3. **Feature Generation**: Sentiment features are computed and passed to the policy
+4. **Decision Integration**: The RulesPolicy amplifies/dampens signals based on sentiment alignment
+
+### Sentiment Features
+| Feature | Description |
+|---------|-------------|
+| `sentiment_score` | -1.0 to 1.0 aggregate sentiment from headlines |
+| `news_volume` | Normalized count of recent headlines (0-1) |
+| `major_news_flag` | 1.0 if high volume or strong sentiment |
+| `news_weight` | Position sizing multiplier (0.5-1.5) |
+
+### Configuration
+```yaml
+# config.yaml
+news_enabled: true
+alpha_vantage_api_key: 'your-key'  # Optional, uses RSS if not set
+```
+
+Or set `ALPHA_VANTAGE_API_KEY` in your `.env` file.
+
+### Policy Behavior
+- **Aligned sentiment**: If trend and sentiment agree, signal strength is amplified by up to 50%
+- **Conflicting sentiment**: If trend and sentiment disagree, signal is dampened by 50%
+- **Major news**: Confidence is adjusted when major news is present
+
+## Calendar-Based Trading Controls
+
+The system tracks earnings dates, Fed meetings, and market holidays to avoid trading during high-uncertainty periods.
+
+### Blackout Events
+| Event Type | Behavior |
+|------------|----------|
+| **Earnings** | Configurable window (default: 2 days before, 1 day after) |
+| **Fed Meeting Days** | Full trading day of FOMC announcements |
+| **Market Holidays** | US market holidays (system won't trade) |
+
+### Blackout Behavior
+During blackouts, the risk gate enforces "reduce-only" mode by default:
+- New positions are blocked
+- Reducing/closing existing positions is allowed
+- Set `blackout_reduce_only: false` in config to block all trades
+
+### Configuration
+```yaml
+# config.yaml
+earnings_blackout_days_before: 2
+earnings_blackout_days_after: 1
+blackout_reduce_only: true
+
+# Manual earnings dates (optional)
+earnings_dates:
+  AAPL: ['2025-01-30', '2025-04-24']
+  MSFT: ['2025-01-28', '2025-04-22']
+```
+
+### Built-in Calendar Data
+- **Fed Meetings**: 2024-2026 FOMC announcement dates pre-loaded
+- **Holidays**: US market holidays 2024-2026 pre-loaded
+
+## System Audit Tool
+
+Verify that all components are properly wired:
+```bash
+uv run python tools/audit.py
+```
+
+This checks:
+- All modules import correctly
+- Sentiment features are computed
+- Calendar flags are generated
+- Risk gate handles blackouts
+- Main.py has all components wired

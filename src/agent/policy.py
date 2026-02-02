@@ -47,19 +47,55 @@ class RulesPolicy(Policy):
         return_anomaly_zscore = _safe_float(
             features.get("return_anomaly_zscore"), default=0.0
         )
+        sentiment_score = _safe_float(features.get("sentiment_score"), default=0.0)
+        news_weight = _safe_float(features.get("news_weight"), default=1.0)
+        major_news_flag = _safe_float(features.get("major_news_flag"), default=0.0)
 
-        if trend_score > 0.05 and return_anomaly_zscore > 1.5:
+        # Base signal from trend
+        signal_strength = trend_score
+
+        # Amplify signal if sentiment aligns with trend
+        if (trend_score > 0 and sentiment_score > 0.2) or (trend_score < 0 and sentiment_score < -0.2):
+            signal_strength *= (1.0 + abs(sentiment_score) * 0.5)
+        # Dampen signal if sentiment conflicts
+        elif (trend_score > 0 and sentiment_score < -0.3) or (trend_score < 0 and sentiment_score > 0.3):
+            signal_strength *= 0.5
+
+        # Determine action based on adjusted signal
+        if signal_strength > 0.05 and return_anomaly_zscore > 1.5:
             action = Action.STRONG_BUY
-        elif trend_score > 0.02:
+        elif signal_strength > 0.02:
             action = Action.BUY
-        elif trend_score < -0.05 and return_anomaly_zscore < -1.5:
+        elif signal_strength < -0.05 and return_anomaly_zscore < -1.5:
             action = Action.STRONG_SELL
-        elif trend_score < -0.02:
+        elif signal_strength < -0.02:
             action = Action.SELL
         else:
             action = Action.HOLD
 
-        return Decision(action=action, confidence=0.6, rationale="Rules-based decision")
+        # Adjust confidence based on news alignment
+        base_confidence = 0.6
+        if major_news_flag > 0:
+            # Major news: higher confidence if aligned, lower if not
+            if (action in (Action.BUY, Action.STRONG_BUY) and sentiment_score > 0.2) or \
+               (action in (Action.SELL, Action.STRONG_SELL) and sentiment_score < -0.2):
+                base_confidence = min(0.85, base_confidence + 0.15)
+            elif (action in (Action.BUY, Action.STRONG_BUY) and sentiment_score < -0.2) or \
+                 (action in (Action.SELL, Action.STRONG_SELL) and sentiment_score > 0.2):
+                base_confidence = max(0.4, base_confidence - 0.15)
+
+        rationale_parts = ["Rules-based decision"]
+        if abs(sentiment_score) > 0.1:
+            sentiment_dir = "positive" if sentiment_score > 0 else "negative"
+            rationale_parts.append(f"sentiment={sentiment_dir}")
+        if news_weight != 1.0:
+            rationale_parts.append(f"news_weight={news_weight:.2f}")
+
+        return Decision(
+            action=action,
+            confidence=round(base_confidence, 2),
+            rationale="; ".join(rationale_parts),
+        )
 
 
 class LLMPolicy(Policy):

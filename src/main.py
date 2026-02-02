@@ -18,11 +18,14 @@ from dotenv import load_dotenv
 
 from agent.llm_clients import LLMClientError, create_llm_client
 from agent.policy import LLMPolicy, RulesPolicy
+from data.calendar_data import CalendarProvider, create_calendar_provider
 from data.market_data import AlpacaMarketData, MarketDataProvider, YahooFinanceMarketData
+from data.news_data import NewsProvider, create_news_provider
 from execution.alpaca_broker import AlpacaBroker
 from execution.broker_interface import BrokerInterface
 from execution.simulator_broker import SimulatorBroker
 from features.behavioral_features import BehavioralFeatureCalculator
+from features.sentiment import compute_news_features
 from observability.notify import create_notifier
 from observability.web import MonitoringServer
 from risk.position_sizing import PositionSizer
@@ -56,6 +59,8 @@ class TradingSystem:
         database: TradingDatabase,
         notifier: Any,
         dry_run: bool = False,
+        news_provider: Optional[NewsProvider] = None,
+        calendar_provider: Optional[CalendarProvider] = None,
     ) -> None:
         self._config = dict(config)
         self._broker = broker
@@ -67,12 +72,16 @@ class TradingSystem:
         self._database = database
         self._notifier = notifier
         self._dry_run = dry_run
+        self._news_provider = news_provider
+        self._calendar_provider = calendar_provider
 
         self._symbols = [str(sym) for sym in (self._config.get("symbols") or [])]
         self._logger = logging.getLogger(__name__)
+        self._news_enabled = bool(self._config.get("news_enabled", True))
 
         self._ohlcv_cache: Dict[str, Any] = {}
         self._quote_cache: Dict[str, Any] = {}
+        self._news_cache: Dict[str, list] = {}
         self._features_cache: Dict[str, Dict[str, Any]] = {}
         self._decisions_cache: Dict[str, Any] = {}
         self._pending_trade_notifications: list[Dict[str, Any]] = []
@@ -100,6 +109,16 @@ class TradingSystem:
             except Exception:
                 self._logger.exception("Failed to load quote for %s", symbol)
 
+            # Fetch news if enabled and provider available
+            if self._news_enabled and self._news_provider:
+                try:
+                    news_items = self._news_provider.get_headlines(symbol, limit=10)
+                    self._news_cache[symbol] = news_items
+                    self._logger.debug("Fetched %d news items for %s", len(news_items), symbol)
+                except Exception:
+                    self._logger.warning("Failed to load news for %s", symbol)
+                    self._news_cache[symbol] = []
+
     def compute_features(self) -> None:
         if not self._ohlcv_cache:
             self._logger.warning("No OHLCV data cached; skipping feature computation")
@@ -111,7 +130,30 @@ class TradingSystem:
                 self._logger.warning("No OHLCV data for %s", symbol)
                 continue
             try:
+                # Compute price/volume features
                 features = self._feature_calculator.compute_all_features(symbol, ohlcv)
+
+                # Add news sentiment features
+                news_items = self._news_cache.get(symbol, [])
+                if news_items:
+                    headlines = [item.title for item in news_items]
+                    api_scores = [item.sentiment_score for item in news_items]
+                    news_features = compute_news_features(headlines, api_scores)
+                    features.update(news_features)
+                else:
+                    # No news: use neutral defaults
+                    features.update({
+                        "sentiment_score": 0.0,
+                        "news_volume": 0.0,
+                        "major_news_flag": 0.0,
+                        "news_weight": 1.0,
+                    })
+
+                # Add calendar flags if provider available
+                if self._calendar_provider:
+                    calendar_flags = self._calendar_provider.get_calendar_flags(symbol)
+                    features.update(calendar_flags)
+
                 self._features_cache[symbol] = features
             except Exception:
                 self._logger.exception("Failed to compute features for %s", symbol)
@@ -672,6 +714,18 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
     database = _build_database(config)
     notifier = create_notifier(config)
 
+    # Build news provider if enabled (optional - gracefully degrades)
+    news_provider: Optional[NewsProvider] = None
+    if config.get("news_enabled", True):
+        try:
+            news_provider = create_news_provider(config)
+            logging.getLogger(__name__).info("News provider initialized")
+        except Exception as e:
+            logging.getLogger(__name__).warning("News provider unavailable: %s", e)
+
+    # Build calendar provider (always available, uses defaults)
+    calendar_provider = create_calendar_provider(config)
+
     system = TradingSystem(
         config,
         broker,
@@ -683,6 +737,8 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
         database,
         notifier,
         dry_run=args.dry_run,
+        news_provider=news_provider,
+        calendar_provider=calendar_provider,
     )
 
     if args.once:

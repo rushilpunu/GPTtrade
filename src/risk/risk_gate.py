@@ -34,9 +34,11 @@ class RiskGate:
         qty: float,
         current_positions: Iterable[Any],
         account_info: Mapping[str, Any],
+        features: Optional[Dict[str, Any]] = None,
     ) -> Tuple[bool, List[str]]:
         reasons: List[str] = []
         normalized_side = (side or "").upper()
+        features = features or {}
 
         equity = self._get_account_value(
             account_info,
@@ -50,6 +52,19 @@ class RiskGate:
 
         if self._is_kill_switch_triggered(account_info, equity):
             reasons.append("daily_kill_switch")
+
+        # Check calendar-based blackout (earnings, fed days, holidays)
+        if features.get("blackout_active", False):
+            blackout_reduce = self._config.get("blackout_reduce_only", True)
+            if blackout_reduce:
+                # During blackout, only allow reducing positions (sells for longs)
+                current_pos = self._get_position_qty(symbol, current_positions)
+                if normalized_side == "BUY" and current_pos >= 0:
+                    reasons.append("calendar_blackout")
+                elif normalized_side == "SELL" and current_pos <= 0:
+                    reasons.append("calendar_blackout")
+            else:
+                reasons.append("calendar_blackout")
 
         if not self._within_market_hours():
             reasons.append("outside_market_hours")
@@ -417,3 +432,11 @@ class RiskGate:
             except Exception:
                 return None
         return None
+
+    def _get_position_qty(self, symbol: str, current_positions: Iterable[Any]) -> float:
+        """Get current position quantity for a symbol."""
+        positions = self._normalize_positions(current_positions)
+        pos = positions.get(symbol.upper())
+        if pos:
+            return pos.qty
+        return 0.0
