@@ -171,6 +171,10 @@ class TradingSystem:
                 context = self._build_context(symbol)
                 decision = self._policy.decide(features, context)
                 self._decisions_cache[symbol] = decision
+                self._logger.info(
+                    "Decision for %s: %s (confidence=%.2f) - %s",
+                    symbol, decision.action.value, decision.confidence, decision.rationale
+                )
 
                 record = DecisionRecord(
                     timestamp=now,
@@ -227,14 +231,19 @@ class TradingSystem:
             account_info = dict(base_account_info)
             account_info["expected_edge"] = float(decision.confidence)
 
+            # Get features for calendar blackout checking
+            features = self._features_cache.get(symbol, {})
+
             approved, reasons = self._risk_gate.check_order(
                 symbol,
                 side.upper(),
                 qty,
                 positions,
                 account_info,
+                features=features,
             )
             if not approved:
+                self._logger.info("Risk gate blocked %s %s: %s", symbol, side, reasons)
                 self._record_risk_block(symbol, side, reasons)
                 continue
 
